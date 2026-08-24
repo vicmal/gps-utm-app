@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Lector GPS / UTM</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<style>
+  :root{
+    --bg:#14181d;
+    --panel:#1c2128;
+    --panel2:#232a33;
+    --line:#333c47;
+    --amber:#e0a13c;
+    --amber-dim:#8a6626;
+    --text:#e7e9ec;
+    --muted:#8b94a1;
+    --green:#4caf7d;
+    --red:#d9645a;
+    --mono:'Courier New',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);}
+  #app{display:flex;flex-direction:column;height:100vh;}
+  #map{flex:1 1 auto;min-height:0;}
+  header{
+    background:var(--panel);
+    padding:10px 14px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    border-bottom:1px solid var(--line);
+    flex:0 0 auto;
+  }
+  header h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.3px;}
+  header .badge{font-size:11px;color:var(--muted);font-family:var(--mono);}
+  #panel{
+    flex:0 0 auto;
+    background:var(--panel);
+    border-top:1px solid var(--line);
+    padding:10px 12px 14px;
+    max-height:46vh;
+    overflow-y:auto;
+  }
+  .readout{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+    margin-bottom:10px;
+  }
+  .card{
+    background:var(--panel2);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:8px 10px;
+  }
+  .card .label{
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.8px;
+    color:var(--muted);
+    margin-bottom:3px;
+  }
+  .card .value{
+    font-family:var(--mono);
+    font-size:14px;
+    color:var(--amber);
+    word-break:break-all;
+  }
+  .card .value.small{font-size:12px;color:var(--text);}
+  .row{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+  button{
+    flex:1 1 auto;
+    background:var(--panel2);
+    color:var(--text);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:10px 8px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    min-width:90px;
+  }
+  button:active{transform:scale(0.97);}
+  button.primary{background:var(--amber-dim);border-color:var(--amber);color:#fff2df;}
+  button.danger{border-color:var(--red);color:var(--red);}
+  #status{
+    font-size:12px;
+    color:var(--muted);
+    margin-bottom:8px;
+    min-height:16px;
+  }
+  #status.locked{color:var(--green);}
+  #status.err{color:var(--red);}
+  #routeList{
+    font-family:var(--mono);
+    font-size:11.5px;
+    max-height:110px;
+    overflow-y:auto;
+    background:var(--panel2);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:6px 8px;
+    margin-bottom:8px;
+  }
+  #routeList div{padding:2px 0;border-bottom:1px dashed var(--line);color:var(--muted);}
+  #routeList div:last-child{border-bottom:none;}
+  #routeList .pt-idx{color:var(--amber);}
+  .total{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    background:var(--panel2);
+    border:1px solid var(--amber-dim);
+    border-radius:6px;
+    padding:8px 10px;
+    margin-bottom:8px;
+  }
+  .total .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;}
+  .total .value{font-family:var(--mono);font-size:18px;color:var(--amber);font-weight:700;}
+  .layerToggle{display:flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:8px;}
+  .layerToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
+  .layerToggle button.active{background:var(--amber-dim);color:#fff2df;}
+  .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
+  .leaflet-control-attribution{font-size:9px !important;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Lector GPS · UTM</h1>
+    <span class="badge" id="gpsBadge">sin señal</span>
+  </header>
+
+  <div id="map"></div>
+
+  <div id="panel">
+    <div class="layerToggle">
+      <button id="btnSat" class="active">Satélite</button>
+      <button id="btnStreet">Calles</button>
+    </div>
+
+    <div id="status">Toca "Ubicarme" para leer tu posición GPS, o toca el mapa para marcar puntos manualmente.</div>
+
+    <div class="readout">
+      <div class="card">
+        <div class="label">Latitud / Longitud</div>
+        <div class="value" id="outLatLon">—</div>
+      </div>
+      <div class="card">
+        <div class="label">UTM (huso / zona)</div>
+        <div class="value" id="outUtm">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Precisión GPS</div>
+        <div class="value small" id="outAcc">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Altitud</div>
+        <div class="value small" id="outAlt">—</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="primary" id="btnLocate">📍 Ubicarme</button>
+      <button id="btnAddHere">+ Punto aquí</button>
+    </div>
+
+    <div class="total">
+      <span class="label">Distancia total de ruta</span>
+      <span class="value" id="totalDist">0 m</span>
+    </div>
+
+    <div id="routeList"><div style="color:var(--muted)">Sin puntos aún.</div></div>
+
+    <div class="row">
+      <button id="btnUndo">Deshacer último</button>
+      <button class="danger" id="btnClear">Borrar ruta</button>
+    </div>
+    <div class="hint">Toca el mapa en cualquier lugar para añadir un punto de ruta.</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
+<script>
+// ---------- Mapa base ----------
+const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([10.0, -84.0], 6);
+
+const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics',
+  maxZoom: 19
+});
+const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19
+});
+satLayer.addTo(map);
+
+document.getElementById('btnSat').onclick = () => {
+  map.removeLayer(streetLayer); satLayer.addTo(map);
+  document.getElementById('btnSat').classList.add('active');
+  document.getElementById('btnStreet').classList.remove('active');
+};
+document.getElementById('btnStreet').onclick = () => {
+  map.removeLayer(satLayer); streetLayer.addTo(map);
+  document.getElementById('btnStreet').classList.add('active');
+  document.getElementById('btnSat').classList.remove('active');
+};
+
+// ---------- Conversión a UTM ----------
+function utmProjString(zone, isNorth){
+  return `+proj=utm +zone=${zone} ${isNorth ? '' : '+south '}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+}
+function toUTM(lat, lon){
+  const zone = Math.floor((lon + 180) / 6) + 1;
+  const isNorth = lat >= 0;
+  const [x, y] = proj4('WGS84', utmProjString(zone, isNorth), [lon, lat]);
+  return { zone, hemi: isNorth ? 'N' : 'S', easting: x, northing: y };
+}
+function fmtUTM(u){
+  return `${u.zone}${u.hemi}  E:${u.easting.toFixed(1)}  N:${u.northing.toFixed(1)}`;
+}
+
+// ---------- Distancia Haversine ----------
+function haversine(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function fmtDist(m){
+  return m >= 1000 ? (m/1000).toFixed(3) + ' km' : m.toFixed(1) + ' m';
+}
+
+// ---------- Estado ----------
+let userMarker = null;
+let routePoints = [];
+let routeLine = null;
+let routeMarkers = [];
+
+function updateReadout(lat, lon, acc, alt){
+  document.getElementById('outLatLon').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+  const u = toUTM(lat, lon);
+  document.getElementById('outUtm').textContent = fmtUTM(u);
+  document.getElementById('outAcc').textContent = acc != null ? `± ${acc.toFixed(1)} m` : '—';
+  document.getElementById('outAlt').textContent = alt != null ? `${alt.toFixed(1)} m` : 'no disponible';
+}
+
+// ---------- Geolocalización ----------
+const statusEl = document.getElementById('status');
+const badgeEl = document.getElementById('gpsBadge');
+
+document.getElementById('btnLocate').onclick = () => {
+  if (!navigator.geolocation){
+    statusEl.textContent = 'Este navegador no soporta geolocalización.';
+    statusEl.className = 'err';
+    return;
+  }
+  statusEl.textContent = 'Buscando señal GPS...';
+  statusEl.className = '';
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const { latitude, longitude, accuracy, altitude } = pos.coords;
+    updateReadout(latitude, longitude, accuracy, altitude);
+    statusEl.textContent = 'Posición obtenida correctamente.';
+    statusEl.className = 'locked';
+    badgeEl.textContent = `± ${accuracy.toFixed(0)} m`;
+
+    if (userMarker) map.removeLayer(userMarker);
+    userMarker = L.circleMarker([latitude, longitude], {
+      radius: 8, color: '#e0a13c', fillColor: '#e0a13c', fillOpacity: 0.9, weight: 2
+    }).addTo(map).bindPopup('Tu posición');
+    map.setView([latitude, longitude], 16);
+  }, (err) => {
+    statusEl.textContent = 'No se pudo obtener la ubicación: ' + err.message;
+    statusEl.className = 'err';
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+};
+
+document.getElementById('btnAddHere').onclick = () => {
+  if (!userMarker){
+    statusEl.textContent = 'Primero ubica tu posición con el botón "Ubicarme".';
+    statusEl.className = 'err';
+    return;
+  }
+  const ll = userMarker.getLatLng();
+  addRoutePoint(ll.lat, ll.lng);
+};
+
+// ---------- Toque en el mapa para agregar puntos de ruta ----------
+map.on('click', (e) => {
+  addRoutePoint(e.latlng.lat, e.latlng.lng);
+  updateReadout(e.latlng.lat, e.latlng.lng, null, null);
+});
+
+function addRoutePoint(lat, lon){
+  routePoints.push({ lat, lon });
+  const marker = L.circleMarker([lat, lon], {
+    radius: 6, color: '#4caf7d', fillColor: '#4caf7d', fillOpacity: 0.9, weight: 2
+  }).addTo(map);
+  routeMarkers.push(marker);
+  redrawRoute();
+}
+
+function redrawRoute(){
+  if (routeLine) map.removeLayer(routeLine);
+  if (routePoints.length > 1){
+    routeLine = L.polyline(routePoints.map(p => [p.lat, p.lon]), { color: '#e0a13c', weight: 3, dashArray: '6 4' }).addTo(map);
+  }
+
+  let total = 0;
+  const listEl = document.getElementById('routeList');
+  listEl.innerHTML = '';
+  routePoints.forEach((p, i) => {
+    let segText = '';
+    if (i > 0){
+      const d = haversine(routePoints[i-1].lat, routePoints[i-1].lon, p.lat, p.lon);
+      total += d;
+      segText = ` · tramo ${fmtDist(d)}`;
+    }
+    const u = toUTM(p.lat, p.lon);
+    const div = document.createElement('div');
+    div.innerHTML = `<span class="pt-idx">P${i+1}</span> ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} — ${fmtUTM(u)}${segText}`;
+    listEl.appendChild(div);
+  });
+  if (routePoints.length === 0){
+    listEl.innerHTML = '<div style="color:var(--muted)">Sin puntos aún.</div>';
+  }
+  document.getElementById('totalDist').textContent = fmtDist(total);
+}
+
+document.getElementById('btnUndo').onclick = () => {
+  routePoints.pop();
+  const m = routeMarkers.pop();
+  if (m) map.removeLayer(m);
+  redrawRoute();
+};
+
+document.getElementById('btnClear').onclick = () => {
+  routePoints = [];
+  routeMarkers.forEach(m => map.removeLayer(m));
+  routeMarkers = [];
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = null;
+  redrawRoute();
+};
+</script>
+</body>
+</html>
