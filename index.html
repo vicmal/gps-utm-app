@@ -153,6 +153,21 @@
       <button id="btnModeArea">▱ Cálculo de área</button>
     </div>
 
+    <div class="areaUnits" id="areaUnitsTop" style="display:none;">
+      <div class="card">
+        <div class="label">m²</div>
+        <div class="value" id="areaM2">0</div>
+      </div>
+      <div class="card">
+        <div class="label">ha</div>
+        <div class="value" id="areaHa">0</div>
+      </div>
+      <div class="card">
+        <div class="label">km²</div>
+        <div class="value" id="areaKm2">0</div>
+      </div>
+    </div>
+
     <div id="status">Toca "Ubicarme" para leer tu posición GPS, o toca el mapa para marcar puntos manualmente.</div>
 
     <div class="readout">
@@ -195,21 +210,6 @@
     </div>
 
     <div id="areaSection">
-      <div class="areaUnits">
-        <div class="card">
-          <div class="label">m²</div>
-          <div class="value" id="areaM2">0</div>
-        </div>
-        <div class="card">
-          <div class="label">ha</div>
-          <div class="value" id="areaHa">0</div>
-        </div>
-        <div class="card">
-          <div class="label">km²</div>
-          <div class="value" id="areaKm2">0</div>
-        </div>
-      </div>
-
       <div id="areaList"><div style="color:var(--muted)">Sin vértices aún.</div></div>
 
       <div class="row">
@@ -291,6 +291,7 @@ const btnModeRoute = document.getElementById('btnModeRoute');
 const btnModeArea = document.getElementById('btnModeArea');
 const routeSection = document.getElementById('routeSection');
 const areaSection = document.getElementById('areaSection');
+const areaUnitsTop = document.getElementById('areaUnitsTop');
 
 btnModeRoute.onclick = () => {
   mode = 'route';
@@ -298,6 +299,7 @@ btnModeRoute.onclick = () => {
   btnModeArea.classList.remove('active');
   routeSection.style.display = '';
   areaSection.style.display = 'none';
+  areaUnitsTop.style.display = 'none';
 };
 btnModeArea.onclick = () => {
   mode = 'area';
@@ -305,6 +307,7 @@ btnModeArea.onclick = () => {
   btnModeRoute.classList.remove('active');
   areaSection.style.display = '';
   routeSection.style.display = 'none';
+  areaUnitsTop.style.display = '';
 };
 
 function updateReadout(lat, lon, acc, alt){
