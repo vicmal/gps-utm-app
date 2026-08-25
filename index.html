@@ -121,8 +121,16 @@
   .layerToggle{display:flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:8px;}
   .layerToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
   .layerToggle button.active{background:var(--amber-dim);color:#fff2df;}
+  .modeToggle{display:flex;gap:0;border:1px solid var(--amber-dim);border-radius:6px;overflow:hidden;margin-bottom:8px;}
+  .modeToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
+  .modeToggle button.active{background:var(--green);color:#0e1a14;}
   .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
   .leaflet-control-attribution{font-size:9px !important;}
+  .areaUnits{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;}
+  .areaUnits .card{padding:8px 6px;text-align:center;}
+  .areaUnits .card .label{font-size:9px;}
+  .areaUnits .card .value{font-size:13px;}
+  #areaSection{display:none;}
 </style>
 </head>
 <body>
@@ -138,6 +146,11 @@
     <div class="layerToggle">
       <button id="btnSat" class="active">Satélite</button>
       <button id="btnStreet">Calles</button>
+    </div>
+
+    <div class="modeToggle">
+      <button id="btnModeRoute" class="active">📏 Ruta</button>
+      <button id="btnModeArea">▱ Cálculo de área</button>
     </div>
 
     <div id="status">Toca "Ubicarme" para leer tu posición GPS, o toca el mapa para marcar puntos manualmente.</div>
@@ -166,18 +179,45 @@
       <button id="btnAddHere">+ Punto aquí</button>
     </div>
 
-    <div class="total">
-      <span class="label">Distancia total de ruta</span>
-      <span class="value" id="totalDist">0 m</span>
+    <div id="routeSection">
+      <div class="total">
+        <span class="label">Distancia total de ruta</span>
+        <span class="value" id="totalDist">0 m</span>
+      </div>
+
+      <div id="routeList"><div style="color:var(--muted)">Sin puntos aún.</div></div>
+
+      <div class="row">
+        <button id="btnUndo">Deshacer último</button>
+        <button class="danger" id="btnClear">Borrar ruta</button>
+      </div>
+      <div class="hint">Toca el mapa en cualquier lugar para añadir un punto de ruta.</div>
     </div>
 
-    <div id="routeList"><div style="color:var(--muted)">Sin puntos aún.</div></div>
+    <div id="areaSection">
+      <div class="areaUnits">
+        <div class="card">
+          <div class="label">m²</div>
+          <div class="value" id="areaM2">0</div>
+        </div>
+        <div class="card">
+          <div class="label">ha</div>
+          <div class="value" id="areaHa">0</div>
+        </div>
+        <div class="card">
+          <div class="label">km²</div>
+          <div class="value" id="areaKm2">0</div>
+        </div>
+      </div>
 
-    <div class="row">
-      <button id="btnUndo">Deshacer último</button>
-      <button class="danger" id="btnClear">Borrar ruta</button>
+      <div id="areaList"><div style="color:var(--muted)">Sin vértices aún.</div></div>
+
+      <div class="row">
+        <button id="btnAreaUndo">Deshacer último</button>
+        <button class="danger" id="btnAreaClear">Borrar polígono</button>
+      </div>
+      <div class="hint">Toca el mapa para ir marcando los vértices del polígono (mínimo 3 puntos).</div>
     </div>
-    <div class="hint">Toca el mapa en cualquier lugar para añadir un punto de ruta.</div>
   </div>
 </div>
 
@@ -241,6 +281,32 @@ let routePoints = [];
 let routeLine = null;
 let routeMarkers = [];
 
+let mode = 'route'; // 'route' | 'area'
+let areaPoints = [];
+let areaPolygon = null;
+let areaMarkers = [];
+let areaRefZone = null; // fija el huso UTM de referencia del primer vértice
+
+const btnModeRoute = document.getElementById('btnModeRoute');
+const btnModeArea = document.getElementById('btnModeArea');
+const routeSection = document.getElementById('routeSection');
+const areaSection = document.getElementById('areaSection');
+
+btnModeRoute.onclick = () => {
+  mode = 'route';
+  btnModeRoute.classList.add('active');
+  btnModeArea.classList.remove('active');
+  routeSection.style.display = '';
+  areaSection.style.display = 'none';
+};
+btnModeArea.onclick = () => {
+  mode = 'area';
+  btnModeArea.classList.add('active');
+  btnModeRoute.classList.remove('active');
+  areaSection.style.display = '';
+  routeSection.style.display = 'none';
+};
+
 function updateReadout(lat, lon, acc, alt){
   document.getElementById('outLatLon').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const u = toUTM(lat, lon);
@@ -286,12 +352,14 @@ document.getElementById('btnAddHere').onclick = () => {
     return;
   }
   const ll = userMarker.getLatLng();
-  addRoutePoint(ll.lat, ll.lng);
+  if (mode === 'area') addAreaPoint(ll.lat, ll.lng);
+  else addRoutePoint(ll.lat, ll.lng);
 };
 
-// ---------- Toque en el mapa para agregar puntos de ruta ----------
+// ---------- Toque en el mapa: agrega punto de ruta o vértice de polígono ----------
 map.on('click', (e) => {
-  addRoutePoint(e.latlng.lat, e.latlng.lng);
+  if (mode === 'area') addAreaPoint(e.latlng.lat, e.latlng.lng);
+  else addRoutePoint(e.latlng.lat, e.latlng.lng);
   updateReadout(e.latlng.lat, e.latlng.lng, null, null);
 });
 
@@ -345,6 +413,96 @@ document.getElementById('btnClear').onclick = () => {
   if (routeLine) map.removeLayer(routeLine);
   routeLine = null;
   redrawRoute();
+};
+
+// ---------- Cálculo de área de polígono ----------
+// Proyecta a UTM usando SIEMPRE el huso/hemisferio del primer vértice,
+// para que todos los puntos queden en el mismo plano cartesiano y la
+// fórmula del área (shoelace) sea válida aunque el polígono roce un
+// límite de huso.
+function toUTMFixedZone(lat, lon){
+  if (!areaRefZone){
+    areaRefZone = { zone: Math.floor((lon + 180) / 6) + 1, isNorth: lat >= 0 };
+  }
+  const [x, y] = proj4('WGS84', utmProjString(areaRefZone.zone, areaRefZone.isNorth), [lon, lat]);
+  return { x, y };
+}
+
+function shoelaceArea(pts){
+  let sum = 0;
+  const n = pts.length;
+  for (let i = 0; i < n; i++){
+    const j = (i + 1) % n;
+    sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  return Math.abs(sum) / 2; // m²
+}
+
+function addAreaPoint(lat, lon){
+  areaPoints.push({ lat, lon });
+  const marker = L.circleMarker([lat, lon], {
+    radius: 6, color: '#4caf7d', fillColor: '#4caf7d', fillOpacity: 0.9, weight: 2
+  }).addTo(map);
+  areaMarkers.push(marker);
+  redrawArea();
+}
+
+function redrawArea(){
+  if (areaPolygon) map.removeLayer(areaPolygon);
+  if (areaPoints.length > 2){
+    areaPolygon = L.polygon(areaPoints.map(p => [p.lat, p.lon]), {
+      color: '#e0a13c', weight: 2, fillColor: '#e0a13c', fillOpacity: 0.18
+    }).addTo(map);
+  } else if (areaPoints.length === 2){
+    areaPolygon = L.polyline(areaPoints.map(p => [p.lat, p.lon]), { color: '#e0a13c', weight: 2, dashArray: '4 4' }).addTo(map);
+  }
+
+  const listEl = document.getElementById('areaList');
+  listEl.innerHTML = '';
+  areaPoints.forEach((p, i) => {
+    const u = toUTM(p.lat, p.lon);
+    const div = document.createElement('div');
+    div.innerHTML = `<span class="pt-idx">V${i+1}</span> ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} — ${fmtUTM(u)}`;
+    listEl.appendChild(div);
+  });
+  if (areaPoints.length === 0){
+    listEl.innerHTML = '<div style="color:var(--muted)">Sin vértices aún.</div>';
+  }
+
+  let areaM2 = 0;
+  if (areaPoints.length > 2){
+    const planar = areaPoints.map(p => toUTMFixedZone(p.lat, p.lon));
+    areaM2 = shoelaceArea(planar);
+  }
+  document.getElementById('areaM2').textContent = areaM2.toFixed(1);
+  document.getElementById('areaHa').textContent = (areaM2 / 10000).toFixed(4);
+  document.getElementById('areaKm2').textContent = (areaM2 / 1000000).toFixed(6);
+
+  if (areaPoints.length > 0 && areaPoints.length < 3){
+    statusEl.textContent = `Agrega al menos ${3 - areaPoints.length} punto(s) más para cerrar el polígono.`;
+    statusEl.className = '';
+  } else if (areaPoints.length >= 3){
+    statusEl.textContent = 'Polígono cerrado automáticamente. Sigue tocando para agregar más vértices.';
+    statusEl.className = 'locked';
+  }
+}
+
+document.getElementById('btnAreaUndo').onclick = () => {
+  areaPoints.pop();
+  const m = areaMarkers.pop();
+  if (m) map.removeLayer(m);
+  if (areaPoints.length === 0) areaRefZone = null;
+  redrawArea();
+};
+
+document.getElementById('btnAreaClear').onclick = () => {
+  areaPoints = [];
+  areaMarkers.forEach(m => map.removeLayer(m));
+  areaMarkers = [];
+  if (areaPolygon) map.removeLayer(areaPolygon);
+  areaPolygon = null;
+  areaRefZone = null;
+  redrawArea();
 };
 </script>
 </body>
