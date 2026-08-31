@@ -131,6 +131,32 @@
   .areaUnits .card .label{font-size:9px;}
   .areaUnits .card .value{font-size:13px;}
   #areaSection{display:none;}
+  .subToggle{display:flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:8px;}
+  .subToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
+  .subToggle button.active{background:var(--amber-dim);color:#fff2df;}
+  .field{flex:1 1 auto;min-width:110px;}
+  .field .label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:3px;}
+  .field input, .field select{
+    width:100%;background:var(--panel);color:var(--text);
+    border:1px solid var(--line);border-radius:6px;padding:8px;
+    font-family:var(--mono);font-size:13px;
+  }
+  #utmTableWrap{display:none;}
+  #utmTableScroll{overflow-x:auto;background:var(--panel2);border:1px solid var(--line);border-radius:6px;margin-bottom:8px;}
+  #utmTable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;}
+  #utmTable th{
+    text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;
+    letter-spacing:.6px;padding:6px 6px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--panel2);
+  }
+  #utmTable td{padding:4px 6px;border-bottom:1px dashed var(--line);}
+  #utmTable td.ptCell{color:var(--amber);white-space:nowrap;}
+  #utmTable input{
+    width:100%;min-width:90px;background:var(--panel);color:var(--text);
+    border:1px solid var(--line);border-radius:4px;padding:6px;
+    font-family:var(--mono);font-size:12.5px;
+  }
+  #utmTable input:invalid{border-color:var(--red);}
 </style>
 </head>
 <body>
@@ -210,13 +236,60 @@
     </div>
 
     <div id="areaSection">
-      <div id="areaList"><div style="color:var(--muted)">Sin vértices aún.</div></div>
-
-      <div class="row">
-        <button id="btnAreaUndo">Deshacer último</button>
-        <button class="danger" id="btnAreaClear">Borrar polígono</button>
+      <div class="subToggle">
+        <button id="btnAreaDigit" class="active">🖊 Digitalizar</button>
+        <button id="btnAreaManual">🔢 Coordenadas UTM</button>
       </div>
-      <div class="hint">Toca el mapa para ir marcando los vértices del polígono (mínimo 3 puntos).</div>
+
+      <div id="areaDigitBlock">
+        <div id="areaList"><div style="color:var(--muted)">Sin vértices aún.</div></div>
+
+        <div class="row">
+          <button id="btnAreaUndo">Deshacer último</button>
+          <button class="danger" id="btnAreaClear">Borrar polígono</button>
+        </div>
+        <div class="hint">Toca el mapa para ir marcando los vértices del polígono (mínimo 3 puntos).</div>
+      </div>
+
+      <div id="areaManualBlock" style="display:none;">
+        <div class="row">
+          <div class="field">
+            <div class="label">Huso UTM</div>
+            <input type="number" id="utmZoneInput" min="1" max="60" step="1" placeholder="Ej: 19">
+          </div>
+          <div class="field">
+            <div class="label">Hemisferio</div>
+            <select id="utmHemiInput">
+              <option value="N">Norte</option>
+              <option value="S">Sur</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field" style="flex:2;">
+            <div class="label">Número de vértices</div>
+            <input type="number" id="vertexCountInput" min="3" max="200" step="1" placeholder="Mínimo 3">
+          </div>
+          <button class="primary" id="btnGenTable" style="align-self:flex-end;">Generar planilla</button>
+        </div>
+
+        <div id="utmTableWrap">
+          <div id="utmTableScroll">
+            <table id="utmTable">
+              <thead>
+                <tr><th>Punto</th><th>Este (X)</th><th>Norte (Y)</th></tr>
+              </thead>
+              <tbody id="utmTableBody"></tbody>
+            </table>
+          </div>
+          <div class="row">
+            <button class="primary" id="btnCalcManual">Calcular área y dibujar</button>
+            <button class="danger" id="btnCancelManual">Cancelar</button>
+          </div>
+        </div>
+        <div class="hint">Ingresa el huso, el hemisferio y las coordenadas Este/Norte de cada vértice.</div>
+      </div>
     </div>
   </div>
 </div>
@@ -286,6 +359,7 @@ let areaPoints = [];
 let areaPolygon = null;
 let areaMarkers = [];
 let areaRefZone = null; // fija el huso UTM de referencia del primer vértice
+let areaManualInfo = null; // { zone, isNorth } cuando el polígono viene de coordenadas UTM ingresadas a mano
 
 const btnModeRoute = document.getElementById('btnModeRoute');
 const btnModeArea = document.getElementById('btnModeArea');
@@ -297,7 +371,7 @@ btnModeRoute.onclick = () => {
   mode = 'route';
   btnModeRoute.classList.add('active');
   btnModeArea.classList.remove('active');
-  routeSection.style.display = '';
+  routeSection.style.display = 'block';
   areaSection.style.display = 'none';
   areaUnitsTop.style.display = 'none';
 };
@@ -305,9 +379,13 @@ btnModeArea.onclick = () => {
   mode = 'area';
   btnModeArea.classList.add('active');
   btnModeRoute.classList.remove('active');
-  areaSection.style.display = '';
+  // Nota: #areaSection tiene "display:none" en la hoja de estilos (para que
+  // arranque oculto), así que aquí hay que fijar un valor explícito distinto
+  // de "" — con "" el navegador vuelve a aplicar la regla del CSS y la
+  // sección nunca se mostraría.
+  areaSection.style.display = 'block';
   routeSection.style.display = 'none';
-  areaUnitsTop.style.display = '';
+  areaUnitsTop.style.display = 'grid';
 };
 
 function updateReadout(lat, lon, acc, alt){
@@ -463,7 +541,11 @@ function redrawArea(){
   const listEl = document.getElementById('areaList');
   listEl.innerHTML = '';
   areaPoints.forEach((p, i) => {
-    const u = toUTM(p.lat, p.lon);
+    // Si el vértice viene de una planilla UTM manual, se muestra tal cual se
+    // ingresó (evita diferencias por redondeo del viaje ida/vuelta lat-lon <-> UTM).
+    const u = (p.e !== undefined && areaManualInfo)
+      ? { zone: areaManualInfo.zone, hemi: areaManualInfo.isNorth ? 'N' : 'S', easting: p.e, northing: p.n }
+      : toUTM(p.lat, p.lon);
     const div = document.createElement('div');
     div.innerHTML = `<span class="pt-idx">V${i+1}</span> ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} — ${fmtUTM(u)}`;
     listEl.appendChild(div);
@@ -474,7 +556,12 @@ function redrawArea(){
 
   let areaM2 = 0;
   if (areaPoints.length > 2){
-    const planar = areaPoints.map(p => toUTMFixedZone(p.lat, p.lon));
+    // Con vértices ingresados a mano se usa directamente Este/Norte (más exacto);
+    // con vértices digitalizados en pantalla se proyectan al huso del primer vértice.
+    const allManual = areaPoints.every(p => p.e !== undefined);
+    const planar = allManual
+      ? areaPoints.map(p => ({ x: p.e, y: p.n }))
+      : areaPoints.map(p => toUTMFixedZone(p.lat, p.lon));
     areaM2 = shoelaceArea(planar);
   }
   document.getElementById('areaM2').textContent = areaM2.toFixed(1);
@@ -494,7 +581,7 @@ document.getElementById('btnAreaUndo').onclick = () => {
   areaPoints.pop();
   const m = areaMarkers.pop();
   if (m) map.removeLayer(m);
-  if (areaPoints.length === 0) areaRefZone = null;
+  if (areaPoints.length === 0){ areaRefZone = null; areaManualInfo = null; }
   redrawArea();
 };
 
@@ -505,7 +592,144 @@ document.getElementById('btnAreaClear').onclick = () => {
   if (areaPolygon) map.removeLayer(areaPolygon);
   areaPolygon = null;
   areaRefZone = null;
+  areaManualInfo = null;
   redrawArea();
+};
+
+// ---------- Ingreso manual de coordenadas UTM ----------
+const btnAreaDigit = document.getElementById('btnAreaDigit');
+const btnAreaManual = document.getElementById('btnAreaManual');
+const areaDigitBlock = document.getElementById('areaDigitBlock');
+const areaManualBlock = document.getElementById('areaManualBlock');
+const utmZoneInput = document.getElementById('utmZoneInput');
+const utmHemiInput = document.getElementById('utmHemiInput');
+const vertexCountInput = document.getElementById('vertexCountInput');
+const btnGenTable = document.getElementById('btnGenTable');
+const utmTableWrap = document.getElementById('utmTableWrap');
+const utmTableBody = document.getElementById('utmTableBody');
+const btnCalcManual = document.getElementById('btnCalcManual');
+const btnCancelManual = document.getElementById('btnCancelManual');
+
+btnAreaDigit.onclick = () => {
+  btnAreaDigit.classList.add('active');
+  btnAreaManual.classList.remove('active');
+  areaDigitBlock.style.display = '';
+  areaManualBlock.style.display = 'none';
+};
+
+btnAreaManual.onclick = () => {
+  btnAreaManual.classList.add('active');
+  btnAreaDigit.classList.remove('active');
+  areaManualBlock.style.display = '';
+  areaDigitBlock.style.display = 'none';
+  // Sugiere huso/hemisferio a partir de la última posición GPS conocida, si existe.
+  if (!utmZoneInput.value && userMarker){
+    const ll = userMarker.getLatLng();
+    const u = toUTM(ll.lat, ll.lng);
+    utmZoneInput.value = u.zone;
+    utmHemiInput.value = u.hemi;
+  }
+};
+
+function resetManualForm(){
+  utmTableWrap.style.display = 'none';
+  utmTableBody.innerHTML = '';
+  utmZoneInput.disabled = false;
+  utmHemiInput.disabled = false;
+  vertexCountInput.disabled = false;
+  btnGenTable.disabled = false;
+}
+
+btnGenTable.onclick = () => {
+  const zone = parseInt(utmZoneInput.value, 10);
+  const count = parseInt(vertexCountInput.value, 10);
+
+  if (!zone || zone < 1 || zone > 60){
+    statusEl.textContent = 'Ingresa un huso UTM válido (1 a 60).';
+    statusEl.className = 'err';
+    return;
+  }
+  if (!count || count < 3){
+    statusEl.textContent = 'El polígono necesita al menos 3 vértices.';
+    statusEl.className = 'err';
+    return;
+  }
+  if (count > 200){
+    statusEl.textContent = 'Máximo 200 vértices por planilla.';
+    statusEl.className = 'err';
+    return;
+  }
+
+  utmTableBody.innerHTML = '';
+  for (let i = 1; i <= count; i++){
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td class="ptCell">P${i}</td>` +
+      `<td><input type="number" step="any" class="utmE" inputmode="decimal" placeholder="Este"></td>` +
+      `<td><input type="number" step="any" class="utmN" inputmode="decimal" placeholder="Norte"></td>`;
+    utmTableBody.appendChild(tr);
+  }
+  utmTableWrap.style.display = 'block';
+  utmZoneInput.disabled = true;
+  utmHemiInput.disabled = true;
+  vertexCountInput.disabled = true;
+  btnGenTable.disabled = true;
+  statusEl.textContent = `Planilla generada: completa Este y Norte para los ${count} vértices.`;
+  statusEl.className = '';
+};
+
+btnCancelManual.onclick = resetManualForm;
+
+btnCalcManual.onclick = () => {
+  const zone = parseInt(utmZoneInput.value, 10);
+  const isNorth = utmHemiInput.value === 'N';
+  const rows = Array.from(utmTableBody.querySelectorAll('tr'));
+
+  const pts = [];
+  for (const tr of rows){
+    const eInput = tr.querySelector('.utmE');
+    const nInput = tr.querySelector('.utmN');
+    const e = parseFloat(eInput.value);
+    const n = parseFloat(nInput.value);
+    if (!isFinite(e) || !isFinite(n)){
+      eInput.style.borderColor = 'var(--red)';
+      nInput.style.borderColor = 'var(--red)';
+      statusEl.textContent = 'Completa Este y Norte en todos los vértices (valores numéricos).';
+      statusEl.className = 'err';
+      return;
+    }
+    eInput.style.borderColor = '';
+    nInput.style.borderColor = '';
+    const [lon, lat] = proj4(utmProjString(zone, isNorth), 'WGS84', [e, n]);
+    pts.push({ lat, lon, e, n });
+  }
+
+  // Reemplaza el polígono actual por el ingresado manualmente.
+  areaPoints = [];
+  areaMarkers.forEach(m => map.removeLayer(m));
+  areaMarkers = [];
+  areaRefZone = null;
+  areaManualInfo = { zone, isNorth };
+
+  pts.forEach(p => {
+    areaPoints.push({ lat: p.lat, lon: p.lon, e: p.e, n: p.n });
+    const marker = L.circleMarker([p.lat, p.lon], {
+      radius: 6, color: '#4caf7d', fillColor: '#4caf7d', fillOpacity: 0.9, weight: 2
+    }).addTo(map);
+    areaMarkers.push(marker);
+  });
+
+  redrawArea();
+
+  if (areaPolygon){
+    map.fitBounds(areaPolygon.getBounds(), { padding: [30, 30] });
+  }
+
+  statusEl.textContent = `Polígono de ${pts.length} vértices generado desde coordenadas UTM. Área calculada.`;
+  statusEl.className = 'locked';
+
+  resetManualForm();
+  btnAreaDigit.click(); // muestra el listado de vértices resultante
 };
 </script>
 </body>
