@@ -41,13 +41,31 @@
     justify-content:space-between;
     border-bottom:1px solid var(--line);
     flex:0 0 auto;
+    gap:10px;
   }
-  header h1{font-size:17px;font-weight:700;margin:0;letter-spacing:.2px;}
+  header h1{font-size:17px;font-weight:700;margin:0;letter-spacing:.2px;flex:0 0 auto;}
   header .badge{
     font-size:11.5px;color:var(--muted);font-family:var(--mono);
     background:var(--panel2);border:1px solid var(--line);
     border-radius:999px;padding:5px 11px;white-space:nowrap;
+    display:inline-flex;align-items:center;gap:6px;
+    flex:0 0 auto;max-width:100%;overflow:hidden;
   }
+  header .badge#gpsBadgeText{overflow:hidden;text-overflow:ellipsis;}
+  .sigBars{display:inline-flex;align-items:flex-end;gap:2px;height:14px;flex:0 0 auto;}
+  .sigBars i{display:block;width:3px;border-radius:1px;background:var(--line);}
+  .sigBars i:nth-child(1){height:5px;}
+  .sigBars i:nth-child(2){height:8px;}
+  .sigBars i:nth-child(3){height:11px;}
+  .sigBars i:nth-child(4){height:14px;}
+  .badge.q-excellent{color:var(--green);border-color:rgba(76,175,125,.5);background:rgba(76,175,125,.14);}
+  .badge.q-good{color:var(--green);border-color:rgba(76,175,125,.4);background:rgba(76,175,125,.09);}
+  .badge.q-fair{color:var(--amber);border-color:rgba(224,161,60,.45);background:rgba(224,161,60,.10);}
+  .badge.q-poor{color:var(--red);border-color:rgba(224,122,112,.45);background:rgba(224,122,112,.10);}
+  .badge.q-excellent .sigBars i.lit{background:var(--green);}
+  .badge.q-good .sigBars i.lit{background:var(--green);}
+  .badge.q-fair .sigBars i.lit{background:var(--amber);}
+  .badge.q-poor .sigBars i.lit{background:var(--red);}
   #panel{
     flex:0 0 auto;
     background:var(--panel);
@@ -105,13 +123,14 @@
     min-width:110px;
     min-height:var(--tap);
     touch-action:manipulation;
-    transition:transform .08s ease, opacity .15s ease, filter .15s ease;
+    transition:transform .08s ease, opacity .15s ease, filter .15s ease, background .15s ease, border-color .15s ease;
   }
   button:active{transform:scale(0.96);filter:brightness(1.08);}
   button.primary{background:linear-gradient(180deg,#e6ac4a,#d1922f);border-color:var(--amber);color:#241a08;box-shadow:0 2px 6px rgba(224,161,60,.28);}
   button.danger{background:var(--panel2);border-color:var(--red);color:var(--red);}
   button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;}
   button:disabled:active{transform:none;filter:none;}
+  button#btnLocate.tracking{background:linear-gradient(180deg,#5cc294,#3f9d72);border-color:var(--green);color:#06180f;box-shadow:0 2px 6px rgba(76,175,125,.32);}
   #status{
     display:flex;align-items:center;gap:8px;
     font-size:13.5px;font-weight:600;
@@ -217,7 +236,10 @@
 <div id="app">
   <header>
     <h1>Lector GPS · UTM</h1>
-    <span class="badge" id="gpsBadge">sin señal</span>
+    <span class="badge" id="gpsBadge" title="Calidad estimada a partir de la precisión reportada por el sistema (GPS + red/celda combinados). El navegador no permite ver el número de satélites ni la constelación individual (GPS, GLONASS, Galileo…): esa información solo la exponen apps nativas.">
+      <span class="sigBars" id="sigBars"><i></i><i></i><i></i><i></i></span>
+      <span id="gpsBadgeText">sin señal</span>
+    </span>
   </header>
 
   <div id="map"></div>
@@ -234,7 +256,7 @@
         <button id="btnModeArea">▱ Área</button>
       </div>
 
-      <div id="status">Toca "Ubicarme" para leer tu posición GPS, o toca el mapa para marcar puntos manualmente.</div>
+      <div id="status">Toca "Ubicarme" para iniciar el seguimiento GPS, o toca el mapa para marcar puntos manualmente.</div>
 
       <div class="row">
         <button class="primary" id="btnLocate">📍 Ubicarme</button>
@@ -258,6 +280,14 @@
       <div class="card">
         <div class="label">Altitud</div>
         <div class="value small" id="outAlt">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Velocidad</div>
+        <div class="value small" id="outSpeed">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Rumbo</div>
+        <div class="value small" id="outHeading">—</div>
       </div>
     </div>
 
@@ -426,6 +456,7 @@ function fmtDist(m){
 
 // ---------- Estado ----------
 let userMarker = null;
+let userAccCircle = null; // círculo que representa el radio de precisión (± m) alrededor de la posición
 let routePoints = [];
 let routeLine = null;
 let routeMarkers = [];
@@ -473,39 +504,241 @@ function updateReadout(lat, lon, acc, alt){
   document.getElementById('outAlt').textContent = alt != null ? `${alt.toFixed(1)} m` : 'no disponible';
 }
 
-// ---------- Geolocalización ----------
+function cardinalDir(deg){
+  const dirs = ['N','NE','E','SE','S','SO','O','NO'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
+function updateSpeedHeading(speed, heading){
+  const speedEl = document.getElementById('outSpeed');
+  const headingEl = document.getElementById('outHeading');
+  // navigator.geolocation puede devolver speed/heading en null cuando el
+  // dispositivo está quieto o el sensor no los soporta — se muestran solo
+  // cuando son números válidos, sin inventar un "0" que no fue medido.
+  speedEl.textContent = (speed != null && isFinite(speed) && speed >= 0)
+    ? `${(speed * 3.6).toFixed(1)} km/h`
+    : '—';
+  headingEl.textContent = (heading != null && isFinite(heading))
+    ? `${heading.toFixed(0)}° ${cardinalDir(heading)}`
+    : '—';
+}
+
+// ---------- Calidad de señal (indicador tipo "barras") ----------
+// El navegador NUNCA expone cuántos satélites está usando el GPS ni de qué
+// constelación (GPS/NAVSTAR, GLONASS, Galileo, BeiDou...) — eso solo lo dan
+// APIs nativas (p. ej. GnssStatus en Android), no la Geolocation API web.
+// Como sustituto honesto, se deriva un nivel de calidad a partir de la
+// precisión (accuracy, en metros) que sí entrega cada lectura: cuanto menor
+// el radio de incertidumbre, mejor el "enganche" GPS real, sea cual sea la
+// combinación de constelaciones que el sistema operativo haya usado.
+function qualityTier(acc){
+  if (acc == null || !isFinite(acc)) return { level: 0, label: 'Sin señal', cls: '' };
+  if (acc <= 5)  return { level: 4, label: 'Excelente', cls: 'q-excellent' };
+  if (acc <= 15) return { level: 3, label: 'Buena',      cls: 'q-good' };
+  if (acc <= 30) return { level: 2, label: 'Regular',    cls: 'q-fair' };
+  return           { level: 1, label: 'Débil',      cls: 'q-poor' };
+}
+
+function renderQualityBadge(acc){
+  const tier = qualityTier(acc);
+  const badge = document.getElementById('gpsBadge');
+  badge.className = 'badge' + (tier.cls ? ' ' + tier.cls : '');
+  const bars = badge.querySelectorAll('#sigBars i');
+  bars.forEach((b, i) => b.classList.toggle('lit', i < tier.level));
+  document.getElementById('gpsBadgeText').textContent = (acc != null && isFinite(acc))
+    ? `${tier.label.toLowerCase()} · ±${acc.toFixed(1)} m`
+    : tier.label.toLowerCase();
+  return tier;
+}
+
+// ---------- Fusión / afinado de lecturas GPS ----------
+// Cada lectura del GPS trae ruido (multipath en ciudad, cobertura parcial
+// del cielo, etc.). En vez de mostrar cada fix crudo tal cual llega, se
+// combinan las últimas lecturas mediante un promedio ponderado por inversa
+// de la varianza (1/accuracy²) — el mismo principio que se usa para
+// combinar mediciones independientes de un mismo punto: la posición
+// resultante da más peso a las lecturas más precisas, y la precisión
+// combinada (fusedAcc) mejora a medida que se acumulan lecturas consistentes,
+// de forma similar a como una app nativa "converge" al mejorar el enganche
+// satelital. Si el dispositivo se mueve de verdad (salto mayor al margen de
+// error esperado), el buffer se reinicia para no "arrastrar" la posición.
+let fixBuffer = []; // { lat, lon, acc, t }
+function fuseFix(lat, lon, acc, t){
+  if (fixBuffer.length){
+    const last = fixBuffer[fixBuffer.length - 1];
+    const d = haversine(last.lat, last.lon, lat, lon);
+    const movementThreshold = (last.acc + acc) * 1.5 + 3;
+    if (d > movementThreshold) fixBuffer = []; // movimiento real: no promediar contra el punto anterior
+  }
+  fixBuffer.push({ lat, lon, acc, t });
+  const cutoff = t - 15000; // ventana de 15 s
+  fixBuffer = fixBuffer.filter(f => f.t >= cutoff).slice(-6); // máx. 6 lecturas recientes
+
+  let sumWLat = 0, sumWLon = 0, sumInvVar = 0;
+  fixBuffer.forEach(f => {
+    const w = 1 / (f.acc * f.acc);
+    sumWLat += w * f.lat;
+    sumWLon += w * f.lon;
+    sumInvVar += w;
+  });
+  const fusedLat = sumWLat / sumInvVar;
+  const fusedLon = sumWLon / sumInvVar;
+  const bestAcc = Math.min(...fixBuffer.map(f => f.acc));
+  // La fórmula de combinación (1/√Σ(1/acc²)) puede dar valores irreales si
+  // se acumulan muchas lecturas; se acota con un piso razonable relativo a
+  // la mejor lectura individual del buffer.
+  const fusedAcc = Math.max(1 / Math.sqrt(sumInvVar), bestAcc * 0.5);
+  return { lat: fusedLat, lon: fusedLon, acc: fusedAcc };
+}
+
+// ---------- Wake Lock: evita que la pantalla se apague durante el seguimiento ----------
+// La mayoría de navegadores móviles pausan (o degradan) el GPS cuando la
+// pantalla se bloquea. Pedir un "screen wake lock" mientras se está
+// rastreando mantiene la pantalla activa para no perder el enganche a mitad
+// de una lectura. No es soportado en todos los navegadores/orígenes — si
+// falla, el resto de la app sigue funcionando igual.
+let wakeLock = null;
+async function requestWakeLock(){
+  try{
+    if ('wakeLock' in navigator){
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  }catch(e){ /* no crítico: permiso denegado o API no soportada */ }
+}
+function releaseWakeLock(){
+  if (wakeLock){ wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (tracking && document.visibilityState === 'visible' && !wakeLock) requestWakeLock();
+});
+
+// ---------- Geolocalización: seguimiento continuo (watchPosition) ----------
 const statusEl = document.getElementById('status');
 const badgeEl = document.getElementById('gpsBadge');
+const btnLocateEl = document.getElementById('btnLocate');
 
-document.getElementById('btnLocate').onclick = () => {
+let tracking = false;
+let watchId = null;
+
+function updateLocateButton(){
+  btnLocateEl.textContent = tracking ? '⏹ Detener seguimiento' : '📍 Ubicarme';
+  btnLocateEl.classList.toggle('tracking', tracking);
+}
+
+function placeUserMarker(lat, lon, acc){
+  const isFirstFix = !userMarker;
+  if (userMarker){
+    userMarker.setLatLng([lat, lon]);
+  } else {
+    userMarker = L.circleMarker([lat, lon], {
+      radius: 8, color: '#e0a13c', fillColor: '#e0a13c', fillOpacity: 0.9, weight: 2
+    }).addTo(map).bindPopup('Tu posición');
+  }
+  if (userAccCircle) map.removeLayer(userAccCircle);
+  if (acc != null && isFinite(acc)){
+    // interactive:false para que el círculo de precisión no "tape" los
+    // toques del usuario sobre el mapa (marcar puntos de ruta/área).
+    userAccCircle = L.circle([lat, lon], {
+      radius: acc, color: '#e0a13c', weight: 1, fillColor: '#e0a13c', fillOpacity: 0.10, interactive: false
+    }).addTo(map);
+  }
+  if (isFirstFix) map.setView([lat, lon], 16);
+}
+
+// Maneja tanto la lectura rápida por red/celda (fase 1) como cada lectura
+// del watch de alta precisión (fase 2) — ambas pasan por la misma fusión,
+// así el fix de red solo pesa mientras no hay nada mejor todavía.
+function onPositionUpdate(pos, source){
+  const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
+  const t = pos.timestamp || Date.now();
+  const fused = fuseFix(latitude, longitude, accuracy, t);
+
+  updateReadout(fused.lat, fused.lon, fused.acc, altitude);
+  updateSpeedHeading(speed, heading);
+  const tier = renderQualityBadge(fused.acc);
+  placeUserMarker(fused.lat, fused.lon, fused.acc);
+
+  if (source === 'network'){
+    statusEl.textContent = 'Posición aproximada por red/celda obtenida. Afinando con GPS…';
+    statusEl.className = '';
+  } else {
+    statusEl.textContent = tier.level >= 3
+      ? `Señal GPS ${tier.label.toLowerCase()} (±${fused.acc.toFixed(1)} m).`
+      : `Rastreando… precisión ±${fused.acc.toFixed(1)} m (${tier.label.toLowerCase()}).`;
+    statusEl.className = tier.level >= 3 ? 'locked' : '';
+  }
+}
+
+function startWatch(){
+  watchId = navigator.geolocation.watchPosition(
+    (pos) => onPositionUpdate(pos, 'gps'),
+    onWatchError,
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
+function onWatchError(err){
+  if (!tracking) return;
+  if (err.code === err.PERMISSION_DENIED){
+    statusEl.textContent = 'Permiso de ubicación denegado.';
+    statusEl.className = 'err';
+    stopTracking();
+    return;
+  }
+  if (err.code === err.TIMEOUT){
+    // Señal débil momentánea: no se detiene el seguimiento, se reintenta.
+    statusEl.textContent = 'Señal GPS débil, reintentando…';
+    statusEl.className = '';
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    startWatch();
+    return;
+  }
+  statusEl.textContent = 'No se pudo obtener la ubicación: ' + err.message;
+  statusEl.className = 'err';
+}
+
+function startTracking(){
   if (!navigator.geolocation){
     statusEl.textContent = 'Este navegador no soporta geolocalización.';
     statusEl.className = 'err';
     return;
   }
-  statusEl.textContent = 'Buscando señal GPS...';
+  if (tracking) return;
+  tracking = true;
+  fixBuffer = [];
+  updateLocateButton();
+  statusEl.textContent = 'Iniciando localización (red/celda + GPS)…';
   statusEl.className = '';
-  navigator.geolocation.getCurrentPosition((pos) => {
-    const { latitude, longitude, accuracy, altitude } = pos.coords;
-    updateReadout(latitude, longitude, accuracy, altitude);
-    statusEl.textContent = 'Posición obtenida correctamente.';
-    statusEl.className = 'locked';
-    badgeEl.textContent = `± ${accuracy.toFixed(0)} m`;
+  requestWakeLock();
 
-    if (userMarker) map.removeLayer(userMarker);
-    userMarker = L.circleMarker([latitude, longitude], {
-      radius: 8, color: '#e0a13c', fillColor: '#e0a13c', fillOpacity: 0.9, weight: 2
-    }).addTo(map).bindPopup('Tu posición');
-    map.setView([latitude, longitude], 16);
-  }, (err) => {
-    statusEl.textContent = 'No se pudo obtener la ubicación: ' + err.message;
-    statusEl.className = 'err';
-  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
-};
+  // Fase 1 — fix rápido y aproximado por red/celda (torres telefónicas /
+  // wifi): se usa solo si el GPS de alta precisión todavía no respondió,
+  // para ubicar al usuario en el mapa de inmediato mientras el chip GPS
+  // "engancha" satélites (lo que en frío puede tardar segundos).
+  navigator.geolocation.getCurrentPosition(
+    (pos) => { if (!userMarker) onPositionUpdate(pos, 'network'); },
+    () => { /* si falla, no es grave: seguimos esperando el fix de GPS */ },
+    { enableHighAccuracy: false, timeout: 5000, maximumAge: 30000 }
+  );
+
+  // Fase 2 — seguimiento continuo de alta precisión (GPS real), que sigue
+  // afinando la posición mientras el modo esté activo.
+  startWatch();
+}
+
+function stopTracking(){
+  tracking = false;
+  if (watchId != null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
+  releaseWakeLock();
+  updateLocateButton();
+}
+
+btnLocateEl.onclick = () => { tracking ? stopTracking() : startTracking(); };
 
 document.getElementById('btnAddHere').onclick = () => {
   if (!userMarker){
-    statusEl.textContent = 'Primero ubica tu posición con el botón "Ubicarme".';
+    statusEl.textContent = 'Primero toca "Ubicarme" para iniciar el seguimiento GPS.';
     statusEl.className = 'err';
     return;
   }
@@ -644,7 +877,7 @@ function redrawArea(){
     ? '<div style="color:var(--muted)">Sin vértices aún.</div>'
     : areaPoints.map((p, i) => {
         const u = pointUTM(p);
-        const accTxt = p.acc !== undefined ? ` · ±${p.acc.toFixed(1)} m` : '';
+        const accTxt = p.acc !== undefined ? ` · ±${p.acc.toFixed(1)} m (${qualityTier(p.acc).label.toLowerCase()})` : '';
         return `<div><span class="pt-idx">V${i+1}</span> ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} — ${fmtUTM(u)}${accTxt}</div>`;
       }).join('');
   // El mismo listado se refleja tanto en "Digitalizar" como en "Grabar puntos",
@@ -876,11 +1109,16 @@ btnRecordPoint.onclick = () => {
   statusEl.textContent = `Buscando señal GPS para el vértice ${nextIdx}...`;
   statusEl.className = '';
 
+  // Grabación de vértice: se usa una lectura cruda (sin fusión con lecturas
+  // previas) porque cada vértice debe representar una medición GPS
+  // independiente en ese punto exacto del terreno, no un promedio suavizado.
   navigator.geolocation.getCurrentPosition((pos) => {
-    const { latitude, longitude, accuracy, altitude } = pos.coords;
+    const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
     updateReadout(latitude, longitude, accuracy, altitude);
+    updateSpeedHeading(speed, heading);
+    renderQualityBadge(accuracy);
     addAreaPoint(latitude, longitude, undefined, undefined, accuracy);
-    statusEl.textContent = `Vértice ${areaPoints.length} grabado (± ${accuracy.toFixed(1)} m).`;
+    statusEl.textContent = `Vértice ${areaPoints.length} grabado (± ${accuracy.toFixed(1)} m, ${qualityTier(accuracy).label.toLowerCase()}).`;
     statusEl.className = 'locked';
     recording = false;
     btnRecordPoint.disabled = false;
