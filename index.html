@@ -2,7 +2,10 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1c2128">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="color-scheme" content="dark">
 <title>Lector GPS / UTM</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
 <style>
@@ -10,153 +13,204 @@
     --bg:#14181d;
     --panel:#1c2128;
     --panel2:#232a33;
+    --panel3:#2a3240;
     --line:#333c47;
     --amber:#e0a13c;
     --amber-dim:#8a6626;
     --text:#e7e9ec;
-    --muted:#8b94a1;
+    --muted:#9aa3b0;
     --green:#4caf7d;
-    --red:#d9645a;
+    --red:#e07a70;
     --mono:'Courier New',ui-monospace,monospace;
+    --radius-lg:16px;
+    --radius-md:12px;
+    --radius-sm:9px;
+    --tap:50px;
   }
-  *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;height:100%;background:var(--bg);font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);}
-  #app{display:flex;flex-direction:column;height:100vh;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);
+    font-family:-apple-system,Segoe UI,Roboto,"Noto Sans",sans-serif;
+    color:var(--text);font-size:15px;-webkit-text-size-adjust:100%;}
+  #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
   #map{flex:1 1 auto;min-height:0;}
   header{
     background:var(--panel);
-    padding:10px 14px;
+    padding:calc(10px + env(safe-area-inset-top)) 16px 10px;
     display:flex;
     align-items:center;
     justify-content:space-between;
     border-bottom:1px solid var(--line);
     flex:0 0 auto;
   }
-  header h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.3px;}
-  header .badge{font-size:11px;color:var(--muted);font-family:var(--mono);}
+  header h1{font-size:17px;font-weight:700;margin:0;letter-spacing:.2px;}
+  header .badge{
+    font-size:11.5px;color:var(--muted);font-family:var(--mono);
+    background:var(--panel2);border:1px solid var(--line);
+    border-radius:999px;padding:5px 11px;white-space:nowrap;
+  }
   #panel{
     flex:0 0 auto;
     background:var(--panel);
     border-top:1px solid var(--line);
-    padding:10px 12px 14px;
-    max-height:46vh;
+    padding:0 14px calc(16px + env(safe-area-inset-bottom));
+    max-height:54vh;
     overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  .stickyBar{
+    position:sticky;top:0;z-index:5;
+    background:var(--panel);
+    padding-top:12px;padding-bottom:2px;
+    box-shadow:0 10px 10px -8px rgba(0,0,0,.35);
   }
   .readout{
     display:grid;
     grid-template-columns:1fr 1fr;
-    gap:8px;
-    margin-bottom:10px;
+    gap:10px;
+    margin:12px 0;
   }
   .card{
     background:var(--panel2);
     border:1px solid var(--line);
-    border-radius:6px;
-    padding:8px 10px;
+    border-radius:var(--radius-md);
+    padding:10px 12px;
   }
   .card .label{
-    font-size:10px;
+    font-size:10.5px;
     text-transform:uppercase;
     letter-spacing:.8px;
     color:var(--muted);
-    margin-bottom:3px;
+    margin-bottom:4px;
+    font-weight:600;
   }
   .card .value{
     font-family:var(--mono);
-    font-size:14px;
+    font-size:16px;
     color:var(--amber);
     word-break:break-all;
+    font-weight:600;
   }
-  .card .value.small{font-size:12px;color:var(--text);}
-  .row{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+  .card .value.small{font-size:13.5px;color:var(--text);}
+  .row{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
   button{
     flex:1 1 auto;
     background:var(--panel2);
     color:var(--text);
     border:1px solid var(--line);
-    border-radius:6px;
-    padding:10px 8px;
-    font-size:13px;
-    font-weight:600;
+    border-radius:var(--radius-md);
+    padding:13px 10px;
+    font-size:14.5px;
+    font-weight:700;
     cursor:pointer;
-    min-width:90px;
+    min-width:110px;
+    min-height:var(--tap);
+    touch-action:manipulation;
+    transition:transform .08s ease, opacity .15s ease, filter .15s ease;
   }
-  button:active{transform:scale(0.97);}
-  button.primary{background:var(--amber-dim);border-color:var(--amber);color:#fff2df;}
-  button.danger{border-color:var(--red);color:var(--red);}
+  button:active{transform:scale(0.96);filter:brightness(1.08);}
+  button.primary{background:linear-gradient(180deg,#e6ac4a,#d1922f);border-color:var(--amber);color:#241a08;box-shadow:0 2px 6px rgba(224,161,60,.28);}
+  button.danger{background:var(--panel2);border-color:var(--red);color:var(--red);}
+  button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;}
+  button:disabled:active{transform:none;filter:none;}
   #status{
-    font-size:12px;
+    display:flex;align-items:center;gap:8px;
+    font-size:13.5px;font-weight:600;
     color:var(--muted);
-    margin-bottom:8px;
-    min-height:16px;
+    background:var(--panel2);
+    border:1px solid var(--line);
+    border-radius:var(--radius-md);
+    padding:11px 13px;
+    margin-bottom:10px;
+    min-height:20px;
+    line-height:1.35;
   }
-  #status.locked{color:var(--green);}
-  #status.err{color:var(--red);}
-  #routeList{
+  #status.locked{color:var(--green);background:rgba(76,175,125,.12);border-color:rgba(76,175,125,.5);}
+  #status.err{color:var(--red);background:rgba(224,122,112,.12);border-color:rgba(224,122,112,.55);}
+  #status::before{content:'ℹ';font-size:15px;flex:0 0 auto;}
+  #status.locked::before{content:'✓';}
+  #status.err::before{content:'⚠';}
+  #routeList, #areaList{
     font-family:var(--mono);
-    font-size:11.5px;
-    max-height:110px;
+    font-size:12.5px;
+    line-height:1.55;
+    max-height:130px;
     overflow-y:auto;
     background:var(--panel2);
     border:1px solid var(--line);
-    border-radius:6px;
-    padding:6px 8px;
-    margin-bottom:8px;
+    border-radius:var(--radius-md);
+    padding:10px 12px;
+    margin-bottom:10px;
   }
-  #routeList div{padding:2px 0;border-bottom:1px dashed var(--line);color:var(--muted);}
-  #routeList div:last-child{border-bottom:none;}
-  #routeList .pt-idx{color:var(--amber);}
+  #routeList div, #areaList div{padding:3px 0;border-bottom:1px dashed var(--line);color:var(--muted);}
+  #routeList div:last-child, #areaList div:last-child{border-bottom:none;}
+  #routeList .pt-idx, #areaList .pt-idx{color:var(--amber);font-weight:700;}
   .total{
     display:flex;
     justify-content:space-between;
-    align-items:baseline;
+    align-items:center;
     background:var(--panel2);
     border:1px solid var(--amber-dim);
-    border-radius:6px;
-    padding:8px 10px;
-    margin-bottom:8px;
+    border-radius:var(--radius-md);
+    padding:12px 14px;
+    margin-bottom:10px;
   }
-  .total .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;}
-  .total .value{font-family:var(--mono);font-size:18px;color:var(--amber);font-weight:700;}
-  .layerToggle{display:flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:8px;}
-  .layerToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
-  .layerToggle button.active{background:var(--amber-dim);color:#fff2df;}
-  .modeToggle{display:flex;gap:0;border:1px solid var(--amber-dim);border-radius:6px;overflow:hidden;margin-bottom:8px;}
-  .modeToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
+  .total .label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600;}
+  .total .value{font-family:var(--mono);font-size:21px;color:var(--amber);font-weight:700;}
+  .segTrack{
+    display:flex;gap:4px;
+    background:var(--panel2);
+    border:1px solid var(--line);
+    border-radius:var(--radius-md);
+    padding:4px;
+    margin-bottom:10px;
+  }
+  .segTrack button{
+    border:none;border-radius:var(--radius-sm);margin:0;flex:1;
+    background:transparent;color:var(--muted);min-height:44px;
+    min-width:0;padding:10px 6px;font-size:13.5px;box-shadow:none;
+  }
+  .segTrack button:active{transform:scale(0.97);filter:none;}
+  .layerToggle button.active{background:var(--panel3);color:var(--text);}
   .modeToggle button.active{background:var(--green);color:#0e1a14;}
-  .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
-  .leaflet-control-attribution{font-size:9px !important;}
-  .areaUnits{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;}
-  .areaUnits .card{padding:8px 6px;text-align:center;}
-  .areaUnits .card .label{font-size:9px;}
-  .areaUnits .card .value{font-size:13px;}
-  #areaSection{display:none;}
-  .subToggle{display:flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:8px;}
-  .subToggle button{border:none;border-radius:0;margin:0;flex:1;background:var(--panel2);}
   .subToggle button.active{background:var(--amber-dim);color:#fff2df;}
-  .field{flex:1 1 auto;min-width:110px;}
-  .field .label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:3px;}
+  .hint{font-size:12px;color:var(--muted);text-align:center;margin-top:4px;line-height:1.4;}
+  .leaflet-control-attribution{font-size:9px !important;}
+  .leaflet-control-zoom a{width:38px !important;height:38px !important;line-height:38px !important;font-size:18px !important;}
+  .areaUnits{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;}
+  .areaUnits .card{padding:10px 6px;text-align:center;}
+  .areaUnits .card .label{font-size:10px;}
+  .areaUnits .card .value{font-size:14.5px;}
+  #areaSection{display:none;}
+  .field{flex:1 1 auto;min-width:120px;}
+  .field .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:5px;font-weight:600;}
   .field input, .field select{
-    width:100%;background:var(--panel);color:var(--text);
-    border:1px solid var(--line);border-radius:6px;padding:8px;
-    font-family:var(--mono);font-size:13px;
+    width:100%;background:var(--panel2);color:var(--text);
+    border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;
+    font-family:var(--mono);font-size:16px;min-height:var(--tap);
+  }
+  .field input:focus, .field select:focus, #utmTable input:focus{
+    outline:2px solid var(--amber);outline-offset:-1px;border-color:var(--amber);
   }
   #utmTableWrap{display:none;}
-  #utmTableScroll{overflow-x:auto;background:var(--panel2);border:1px solid var(--line);border-radius:6px;margin-bottom:8px;}
-  #utmTable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;}
+  #utmTableScroll{overflow-x:auto;background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-md);margin-bottom:10px;}
+  #utmTable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;}
   #utmTable th{
-    text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;
-    letter-spacing:.6px;padding:6px 6px;border-bottom:1px solid var(--line);
+    text-align:left;color:var(--muted);font-size:10.5px;text-transform:uppercase;
+    letter-spacing:.6px;padding:10px 8px;border-bottom:1px solid var(--line);
     position:sticky;top:0;background:var(--panel2);
   }
-  #utmTable td{padding:4px 6px;border-bottom:1px dashed var(--line);}
-  #utmTable td.ptCell{color:var(--amber);white-space:nowrap;}
+  #utmTable td{padding:6px 8px;border-bottom:1px dashed var(--line);}
+  #utmTable td.ptCell{color:var(--amber);white-space:nowrap;font-weight:700;}
   #utmTable input{
-    width:100%;min-width:90px;background:var(--panel);color:var(--text);
-    border:1px solid var(--line);border-radius:4px;padding:6px;
-    font-family:var(--mono);font-size:12.5px;
+    width:100%;min-width:96px;background:var(--panel);color:var(--text);
+    border:1px solid var(--line);border-radius:8px;padding:10px 8px;
+    font-family:var(--mono);font-size:15px;min-height:42px;
   }
   #utmTable input:invalid{border-color:var(--red);}
+  .formMsg{font-size:13px;min-height:16px;margin:4px 0 10px;color:var(--muted);font-weight:600;line-height:1.4;}
+  .formMsg.err{color:var(--red);}
+  .formMsg.err::before{content:'⚠ ';}
+  .formMsg.ok{color:var(--green);}
 </style>
 </head>
 <body>
@@ -169,32 +223,24 @@
   <div id="map"></div>
 
   <div id="panel">
-    <div class="layerToggle">
-      <button id="btnSat" class="active">Satélite</button>
-      <button id="btnStreet">Calles</button>
+    <div class="segTrack layerToggle">
+      <button id="btnSat" class="active">🛰 Satélite</button>
+      <button id="btnStreet">🗺 Calles</button>
     </div>
 
-    <div class="modeToggle">
-      <button id="btnModeRoute" class="active">📏 Ruta</button>
-      <button id="btnModeArea">▱ Cálculo de área</button>
-    </div>
+    <div class="stickyBar">
+      <div class="segTrack modeToggle">
+        <button id="btnModeRoute" class="active">📏 Ruta</button>
+        <button id="btnModeArea">▱ Área</button>
+      </div>
 
-    <div class="areaUnits" id="areaUnitsTop" style="display:none;">
-      <div class="card">
-        <div class="label">m²</div>
-        <div class="value" id="areaM2">0</div>
-      </div>
-      <div class="card">
-        <div class="label">ha</div>
-        <div class="value" id="areaHa">0</div>
-      </div>
-      <div class="card">
-        <div class="label">km²</div>
-        <div class="value" id="areaKm2">0</div>
+      <div id="status">Toca "Ubicarme" para leer tu posición GPS, o toca el mapa para marcar puntos manualmente.</div>
+
+      <div class="row">
+        <button class="primary" id="btnLocate">📍 Ubicarme</button>
+        <button id="btnAddHere">➕ Punto aquí</button>
       </div>
     </div>
-
-    <div id="status">Toca "Ubicarme" para leer tu posición GPS, o toca el mapa para marcar puntos manualmente.</div>
 
     <div class="readout">
       <div class="card">
@@ -215,11 +261,6 @@
       </div>
     </div>
 
-    <div class="row">
-      <button class="primary" id="btnLocate">📍 Ubicarme</button>
-      <button id="btnAddHere">+ Punto aquí</button>
-    </div>
-
     <div id="routeSection">
       <div class="total">
         <span class="label">Distancia total de ruta</span>
@@ -236,7 +277,22 @@
     </div>
 
     <div id="areaSection">
-      <div class="subToggle">
+      <div class="areaUnits" id="areaUnitsTop" style="display:none;">
+        <div class="card">
+          <div class="label">m²</div>
+          <div class="value" id="areaM2">0</div>
+        </div>
+        <div class="card">
+          <div class="label">ha</div>
+          <div class="value" id="areaHa">0</div>
+        </div>
+        <div class="card">
+          <div class="label">km²</div>
+          <div class="value" id="areaKm2">0</div>
+        </div>
+      </div>
+
+      <div class="segTrack subToggle">
         <button id="btnAreaDigit" class="active">🖊 Digitalizar</button>
         <button id="btnAreaManual">🔢 Coordenadas UTM</button>
       </div>
@@ -273,6 +329,8 @@
           </div>
           <button class="primary" id="btnGenTable" style="align-self:flex-end;">Generar planilla</button>
         </div>
+
+        <div id="manualMsg" class="formMsg"></div>
 
         <div id="utmTableWrap">
           <div id="utmTableScroll">
@@ -609,18 +667,31 @@ const utmTableWrap = document.getElementById('utmTableWrap');
 const utmTableBody = document.getElementById('utmTableBody');
 const btnCalcManual = document.getElementById('btnCalcManual');
 const btnCancelManual = document.getElementById('btnCancelManual');
+const manualMsg = document.getElementById('manualMsg');
+
+// Muestra el aviso justo junto al formulario (además del status general de
+// arriba), porque el panel tiene scroll propio y el status puede quedar
+// fuera de vista mientras el usuario está completando estos campos.
+function setManualMsg(text, kind){
+  manualMsg.textContent = text || '';
+  manualMsg.className = 'formMsg' + (kind ? ' ' + kind : '');
+  if (text){
+    statusEl.textContent = text;
+    statusEl.className = kind === 'err' ? 'err' : (kind === 'ok' ? 'locked' : '');
+  }
+}
 
 btnAreaDigit.onclick = () => {
   btnAreaDigit.classList.add('active');
   btnAreaManual.classList.remove('active');
-  areaDigitBlock.style.display = '';
+  areaDigitBlock.style.display = 'block';
   areaManualBlock.style.display = 'none';
 };
 
 btnAreaManual.onclick = () => {
   btnAreaManual.classList.add('active');
   btnAreaDigit.classList.remove('active');
-  areaManualBlock.style.display = '';
+  areaManualBlock.style.display = 'block';
   areaDigitBlock.style.display = 'none';
   // Sugiere huso/hemisferio a partir de la última posición GPS conocida, si existe.
   if (!utmZoneInput.value && userMarker){
@@ -638,6 +709,7 @@ function resetManualForm(){
   utmHemiInput.disabled = false;
   vertexCountInput.disabled = false;
   btnGenTable.disabled = false;
+  setManualMsg('', '');
 }
 
 btnGenTable.onclick = () => {
@@ -645,18 +717,18 @@ btnGenTable.onclick = () => {
   const count = parseInt(vertexCountInput.value, 10);
 
   if (!zone || zone < 1 || zone > 60){
-    statusEl.textContent = 'Ingresa un huso UTM válido (1 a 60).';
-    statusEl.className = 'err';
+    setManualMsg('Ingresa un huso UTM válido (1 a 60) antes de generar la planilla.', 'err');
+    utmZoneInput.focus();
     return;
   }
   if (!count || count < 3){
-    statusEl.textContent = 'El polígono necesita al menos 3 vértices.';
-    statusEl.className = 'err';
+    setManualMsg('Indica el número de vértices del polígono (mínimo 3).', 'err');
+    vertexCountInput.focus();
     return;
   }
   if (count > 200){
-    statusEl.textContent = 'Máximo 200 vértices por planilla.';
-    statusEl.className = 'err';
+    setManualMsg('Máximo 200 vértices por planilla.', 'err');
+    vertexCountInput.focus();
     return;
   }
 
@@ -674,8 +746,7 @@ btnGenTable.onclick = () => {
   utmHemiInput.disabled = true;
   vertexCountInput.disabled = true;
   btnGenTable.disabled = true;
-  statusEl.textContent = `Planilla generada: completa Este y Norte para los ${count} vértices.`;
-  statusEl.className = '';
+  setManualMsg(`Planilla generada: completa Este y Norte para los ${count} vértices.`, '');
 };
 
 btnCancelManual.onclick = resetManualForm;
@@ -694,8 +765,7 @@ btnCalcManual.onclick = () => {
     if (!isFinite(e) || !isFinite(n)){
       eInput.style.borderColor = 'var(--red)';
       nInput.style.borderColor = 'var(--red)';
-      statusEl.textContent = 'Completa Este y Norte en todos los vértices (valores numéricos).';
-      statusEl.className = 'err';
+      setManualMsg('Completa Este y Norte en todos los vértices (valores numéricos).', 'err');
       return;
     }
     eInput.style.borderColor = '';
