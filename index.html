@@ -294,7 +294,8 @@
 
       <div class="segTrack subToggle">
         <button id="btnAreaDigit" class="active">🖊 Digitalizar</button>
-        <button id="btnAreaManual">🔢 Coordenadas UTM</button>
+        <button id="btnAreaRecord">📍 Grabar</button>
+        <button id="btnAreaManual">🔢 Tabla UTM</button>
       </div>
 
       <div id="areaDigitBlock">
@@ -305,6 +306,23 @@
           <button class="danger" id="btnAreaClear">Borrar polígono</button>
         </div>
         <div class="hint">Toca el mapa para ir marcando los vértices del polígono (mínimo 3 puntos).</div>
+      </div>
+
+      <div id="areaRecordBlock" style="display:none;">
+        <div class="row">
+          <button class="primary" id="btnRecordPoint">📍 Grabar punto aquí</button>
+        </div>
+
+        <div id="recordList"><div style="color:var(--muted)">Sin puntos grabados aún.</div></div>
+
+        <div class="row">
+          <button id="btnRecordUndo">Deshacer último</button>
+          <button class="danger" id="btnRecordCancel">Cancelar grabación</button>
+        </div>
+        <div class="row">
+          <button class="primary" id="btnRecordFinish">✔ Finalizar y guardar</button>
+        </div>
+        <div class="hint">Camina hasta cada vértice del terreno y toca "Grabar punto aquí" (mínimo 3). Al finalizar se guarda un archivo .csv con la tabla de coordenadas y se calcula el área.</div>
       </div>
 
       <div id="areaManualBlock" style="display:none;">
@@ -418,6 +436,7 @@ let areaPolygon = null;
 let areaMarkers = [];
 let areaRefZone = null; // fija el huso UTM de referencia del primer vértice
 let areaManualInfo = null; // { zone, isNorth } cuando el polígono viene de coordenadas UTM ingresadas a mano
+let areaInputMode = 'digit'; // 'digit' | 'record' | 'manual' — cómo se están cargando los vértices del polígono
 
 const btnModeRoute = document.getElementById('btnModeRoute');
 const btnModeArea = document.getElementById('btnModeArea');
@@ -490,15 +509,28 @@ document.getElementById('btnAddHere').onclick = () => {
     statusEl.className = 'err';
     return;
   }
+  if (mode === 'area' && areaInputMode !== 'digit'){
+    statusEl.textContent = areaInputMode === 'record'
+      ? 'Usa el botón "Grabar punto aquí" para añadir vértices en este modo.'
+      : 'Cambia a "Digitalizar" para añadir vértices con este botón.';
+    statusEl.className = '';
+    return;
+  }
   const ll = userMarker.getLatLng();
   if (mode === 'area') addAreaPoint(ll.lat, ll.lng);
   else addRoutePoint(ll.lat, ll.lng);
 };
 
 // ---------- Toque en el mapa: agrega punto de ruta o vértice de polígono ----------
+// En modo área, solo cuenta como vértice si el sub-modo activo es "Digitalizar"
+// (en "Grabar puntos" y "Tabla UTM" un toque accidental en el mapa no debe
+// alterar el polígono — las coordenadas ahí vienen del GPS o de la planilla).
 map.on('click', (e) => {
-  if (mode === 'area') addAreaPoint(e.latlng.lat, e.latlng.lng);
-  else addRoutePoint(e.latlng.lat, e.latlng.lng);
+  if (mode === 'area'){
+    if (areaInputMode === 'digit') addAreaPoint(e.latlng.lat, e.latlng.lng);
+  } else {
+    addRoutePoint(e.latlng.lat, e.latlng.lng);
+  }
   updateReadout(e.latlng.lat, e.latlng.lng, null, null);
 });
 
@@ -577,13 +609,25 @@ function shoelaceArea(pts){
   return Math.abs(sum) / 2; // m²
 }
 
-function addAreaPoint(lat, lon){
-  areaPoints.push({ lat, lon });
+function addAreaPoint(lat, lon, e, n, acc){
+  const pt = { lat, lon };
+  if (e !== undefined && n !== undefined){ pt.e = e; pt.n = n; }
+  if (acc !== undefined){ pt.acc = acc; }
+  areaPoints.push(pt);
   const marker = L.circleMarker([lat, lon], {
     radius: 6, color: '#4caf7d', fillColor: '#4caf7d', fillOpacity: 0.9, weight: 2
   }).addTo(map);
   areaMarkers.push(marker);
   redrawArea();
+}
+
+// Si el vértice viene de una planilla UTM manual (o de una grabación GPS con
+// huso fijado por el primer punto), se muestra/exporta tal cual se ingresó o
+// leyó, para evitar diferencias por redondeo del viaje ida/vuelta lat-lon <-> UTM.
+function pointUTM(p){
+  return (p.e !== undefined && areaManualInfo)
+    ? { zone: areaManualInfo.zone, hemi: areaManualInfo.isNorth ? 'N' : 'S', easting: p.e, northing: p.n }
+    : toUTM(p.lat, p.lon);
 }
 
 function redrawArea(){
@@ -596,21 +640,19 @@ function redrawArea(){
     areaPolygon = L.polyline(areaPoints.map(p => [p.lat, p.lon]), { color: '#e0a13c', weight: 2, dashArray: '4 4' }).addTo(map);
   }
 
-  const listEl = document.getElementById('areaList');
-  listEl.innerHTML = '';
-  areaPoints.forEach((p, i) => {
-    // Si el vértice viene de una planilla UTM manual, se muestra tal cual se
-    // ingresó (evita diferencias por redondeo del viaje ida/vuelta lat-lon <-> UTM).
-    const u = (p.e !== undefined && areaManualInfo)
-      ? { zone: areaManualInfo.zone, hemi: areaManualInfo.isNorth ? 'N' : 'S', easting: p.e, northing: p.n }
-      : toUTM(p.lat, p.lon);
-    const div = document.createElement('div');
-    div.innerHTML = `<span class="pt-idx">V${i+1}</span> ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} — ${fmtUTM(u)}`;
-    listEl.appendChild(div);
-  });
-  if (areaPoints.length === 0){
-    listEl.innerHTML = '<div style="color:var(--muted)">Sin vértices aún.</div>';
-  }
+  const listHtml = areaPoints.length === 0
+    ? '<div style="color:var(--muted)">Sin vértices aún.</div>'
+    : areaPoints.map((p, i) => {
+        const u = pointUTM(p);
+        const accTxt = p.acc !== undefined ? ` · ±${p.acc.toFixed(1)} m` : '';
+        return `<div><span class="pt-idx">V${i+1}</span> ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} — ${fmtUTM(u)}${accTxt}</div>`;
+      }).join('');
+  // El mismo listado se refleja tanto en "Digitalizar" como en "Grabar puntos",
+  // porque ambos comparten el arreglo areaPoints y el usuario puede alternar
+  // entre ellos sin perder lo ya cargado.
+  document.getElementById('areaList').innerHTML = listHtml;
+  const recordListEl = document.getElementById('recordList');
+  if (recordListEl) recordListEl.innerHTML = listHtml;
 
   let areaM2 = 0;
   if (areaPoints.length > 2){
@@ -635,15 +677,18 @@ function redrawArea(){
   }
 }
 
-document.getElementById('btnAreaUndo').onclick = () => {
+// Deshacer/borrar son comunes a "Digitalizar" y "Grabar puntos" (ambos
+// modos comparten el mismo arreglo areaPoints), así que quedan como
+// funciones con nombre para engancharlas desde los botones de ambos bloques.
+function undoLastAreaPoint(){
   areaPoints.pop();
   const m = areaMarkers.pop();
   if (m) map.removeLayer(m);
   if (areaPoints.length === 0){ areaRefZone = null; areaManualInfo = null; }
   redrawArea();
-};
+}
 
-document.getElementById('btnAreaClear').onclick = () => {
+function clearAreaPolygon(){
   areaPoints = [];
   areaMarkers.forEach(m => map.removeLayer(m));
   areaMarkers = [];
@@ -652,12 +697,17 @@ document.getElementById('btnAreaClear').onclick = () => {
   areaRefZone = null;
   areaManualInfo = null;
   redrawArea();
-};
+}
 
-// ---------- Ingreso manual de coordenadas UTM ----------
+document.getElementById('btnAreaUndo').onclick = undoLastAreaPoint;
+document.getElementById('btnAreaClear').onclick = clearAreaPolygon;
+
+// ---------- Tres formas de cargar el polígono: digitalizar, grabar por GPS o tabla UTM ----------
 const btnAreaDigit = document.getElementById('btnAreaDigit');
+const btnAreaRecord = document.getElementById('btnAreaRecord');
 const btnAreaManual = document.getElementById('btnAreaManual');
 const areaDigitBlock = document.getElementById('areaDigitBlock');
+const areaRecordBlock = document.getElementById('areaRecordBlock');
 const areaManualBlock = document.getElementById('areaManualBlock');
 const utmZoneInput = document.getElementById('utmZoneInput');
 const utmHemiInput = document.getElementById('utmHemiInput');
@@ -681,18 +731,22 @@ function setManualMsg(text, kind){
   }
 }
 
-btnAreaDigit.onclick = () => {
-  btnAreaDigit.classList.add('active');
-  btnAreaManual.classList.remove('active');
-  areaDigitBlock.style.display = 'block';
-  areaManualBlock.style.display = 'none';
-};
+function setAreaInputMode(newMode){
+  areaInputMode = newMode;
+  btnAreaDigit.classList.toggle('active', newMode === 'digit');
+  btnAreaRecord.classList.toggle('active', newMode === 'record');
+  btnAreaManual.classList.toggle('active', newMode === 'manual');
+  areaDigitBlock.style.display = newMode === 'digit' ? 'block' : 'none';
+  areaRecordBlock.style.display = newMode === 'record' ? 'block' : 'none';
+  areaManualBlock.style.display = newMode === 'manual' ? 'block' : 'none';
+}
+
+btnAreaDigit.onclick = () => setAreaInputMode('digit');
+
+btnAreaRecord.onclick = () => setAreaInputMode('record');
 
 btnAreaManual.onclick = () => {
-  btnAreaManual.classList.add('active');
-  btnAreaDigit.classList.remove('active');
-  areaManualBlock.style.display = 'block';
-  areaDigitBlock.style.display = 'none';
+  setAreaInputMode('manual');
   // Sugiere huso/hemisferio a partir de la última posición GPS conocida, si existe.
   if (!utmZoneInput.value && userMarker){
     const ll = userMarker.getLatLng();
@@ -800,6 +854,107 @@ btnCalcManual.onclick = () => {
 
   resetManualForm();
   btnAreaDigit.click(); // muestra el listado de vértices resultante
+};
+
+// ---------- Grabar puntos por GPS y guardar en disco ----------
+const btnRecordPoint = document.getElementById('btnRecordPoint');
+const btnRecordUndo = document.getElementById('btnRecordUndo');
+const btnRecordCancel = document.getElementById('btnRecordCancel');
+const btnRecordFinish = document.getElementById('btnRecordFinish');
+let recording = false; // evita doble toque mientras se espera la respuesta del GPS
+
+btnRecordPoint.onclick = () => {
+  if (recording) return;
+  if (!navigator.geolocation){
+    statusEl.textContent = 'Este navegador no soporta geolocalización.';
+    statusEl.className = 'err';
+    return;
+  }
+  recording = true;
+  btnRecordPoint.disabled = true;
+  const nextIdx = areaPoints.length + 1;
+  statusEl.textContent = `Buscando señal GPS para el vértice ${nextIdx}...`;
+  statusEl.className = '';
+
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const { latitude, longitude, accuracy, altitude } = pos.coords;
+    updateReadout(latitude, longitude, accuracy, altitude);
+    addAreaPoint(latitude, longitude, undefined, undefined, accuracy);
+    statusEl.textContent = `Vértice ${areaPoints.length} grabado (± ${accuracy.toFixed(1)} m).`;
+    statusEl.className = 'locked';
+    recording = false;
+    btnRecordPoint.disabled = false;
+  }, (err) => {
+    statusEl.textContent = 'No se pudo obtener la ubicación: ' + err.message;
+    statusEl.className = 'err';
+    recording = false;
+    btnRecordPoint.disabled = false;
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+};
+
+btnRecordUndo.onclick = undoLastAreaPoint;
+btnRecordCancel.onclick = clearAreaPolygon;
+
+function csvEscape(val){
+  const s = String(val);
+  return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// Descarga la tabla de vértices (y el resumen de área) como un .csv. En el
+// navegador del teléfono o la computadora esto dispara la descarga normal
+// del sistema (carpeta Descargas / Downloads) — es la forma estándar de
+// "guardar en el disco duro" desde una página web, sin backend de por medio.
+function exportAreaCSV(filenamePrefix){
+  const rows = [['Punto', 'Latitud', 'Longitud', 'Huso', 'Hemisferio', 'Este_X', 'Norte_Y', 'Precision_m']];
+  areaPoints.forEach((p, i) => {
+    const u = pointUTM(p);
+    rows.push([
+      'P' + (i + 1),
+      p.lat.toFixed(6),
+      p.lon.toFixed(6),
+      u.zone,
+      u.hemi,
+      u.easting.toFixed(2),
+      u.northing.toFixed(2),
+      p.acc !== undefined ? p.acc.toFixed(1) : ''
+    ]);
+  });
+  rows.push([]);
+  const areaM2 = parseFloat(document.getElementById('areaM2').textContent) || 0;
+  rows.push(['Resumen']);
+  rows.push(['Vertices', areaPoints.length]);
+  rows.push(['Area_m2', areaM2.toFixed(1)]);
+  rows.push(['Area_ha', (areaM2 / 10000).toFixed(4)]);
+  rows.push(['Area_km2', (areaM2 / 1000000).toFixed(6)]);
+
+  const csv = rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+  // El BOM al inicio hace que Excel abra el archivo con los acentos correctos.
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const ts = new Date();
+  const pad = (v) => String(v).padStart(2, '0');
+  const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filenamePrefix}_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+btnRecordFinish.onclick = () => {
+  if (areaPoints.length < 3){
+    statusEl.textContent = `Graba al menos ${3 - areaPoints.length} punto(s) más antes de finalizar (mínimo 3 vértices).`;
+    statusEl.className = 'err';
+    return;
+  }
+  exportAreaCSV('puntos_utm');
+  if (areaPolygon){
+    map.fitBounds(areaPolygon.getBounds(), { padding: [30, 30] });
+  }
+  statusEl.textContent = `Grabación finalizada: ${areaPoints.length} vértices guardados en un archivo .csv. Área calculada.`;
+  statusEl.className = 'locked';
 };
 </script>
 </body>
