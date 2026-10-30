@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Lector GPS / UTM v1.1 — Guardado automático (localStorage), exportación de ruta CSV/GPX, vista inicial: último punto GPS guardado o Caracas. -->
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -303,6 +304,10 @@
         <button id="btnUndo">Deshacer último</button>
         <button class="danger" id="btnClear">Borrar ruta</button>
       </div>
+      <div class="row">
+        <button id="btnExportRouteCsv">Exportar ruta (CSV)</button>
+        <button id="btnExportRouteGpx">Exportar ruta (GPX)</button>
+      </div>
       <div class="hint">Toca el mapa en cualquier lugar para añadir un punto de ruta.</div>
     </div>
 
@@ -404,7 +409,24 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
 <script>
 // ---------- Mapa base ----------
-const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([10.0, -84.0], 6);
+// Vista inicial: si hay un último punto GPS guardado, el mapa abre centrado
+// en él (zoom 16); si no, abre en Caracas (10.48, -66.90), capital de
+// Venezuela, con zoom 12. El primer fix GPS sigue centrando el mapa en la
+// posición real (zoom 16).
+function initialView(){
+  try{
+    const raw = localStorage.getItem('gpsutm_lastpos');
+    if (raw){
+      const p = JSON.parse(raw);
+      if (p && isFinite(p.lat) && isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180){
+        return { center: [p.lat, p.lon], zoom: 16 };
+      }
+    }
+  }catch(e){ /* sin acceso al almacenamiento o dato corrupto: se usa Caracas */ }
+  return { center: [10.48, -66.90], zoom: 12 }; // Caracas, Venezuela
+}
+const initView = initialView();
+const map = L.map('map', { zoomControl: true, attributionControl: true }).setView(initView.center, initView.zoom);
 
 const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics',
@@ -468,6 +490,27 @@ let areaMarkers = [];
 let areaRefZone = null; // fija el huso UTM de referencia del primer vértice
 let areaManualInfo = null; // { zone, isNorth } cuando el polígono viene de coordenadas UTM ingresadas a mano
 let areaInputMode = 'digit'; // 'digit' | 'record' | 'manual' — cómo se están cargando los vértices del polígono
+
+// ---------- Guardado automático (localStorage) ----------
+// Todo el trabajo queda guardado en el teléfono/navegador y se restaura al
+// reabrir la app: puntos de ruta, vértices del polígono, huso de referencia
+// y última posición GPS. Borrar la ruta o el polígono borra también su
+// guardado, porque redrawRoute/redrawArea guardan el estado actual.
+const LS_KEYS = { route: 'gpsutm_route', area: 'gpsutm_area', areaMeta: 'gpsutm_area_meta', lastpos: 'gpsutm_lastpos' };
+function lsSet(key, value){
+  try{ localStorage.setItem(key, JSON.stringify(value)); }catch(e){ /* sin espacio o sin acceso */ }
+}
+function lsGet(key){
+  try{
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function saveState(){
+  lsSet(LS_KEYS.route, routePoints);
+  lsSet(LS_KEYS.area, areaPoints);
+  lsSet(LS_KEYS.areaMeta, { refZone: areaRefZone, manualInfo: areaManualInfo });
+}
 
 const btnModeRoute = document.getElementById('btnModeRoute');
 const btnModeArea = document.getElementById('btnModeArea');
@@ -653,6 +696,9 @@ function onPositionUpdate(pos, source){
   const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
   const t = pos.timestamp || Date.now();
   const fused = fuseFix(latitude, longitude, accuracy, t);
+  // Última posición GPS navegada: es la que usará la vista inicial la
+  // próxima vez que se abra la app.
+  lsSet(LS_KEYS.lastpos, { lat: fused.lat, lon: fused.lon, t });
 
   updateReadout(fused.lat, fused.lon, fused.acc, altitude);
   updateSpeedHeading(speed, heading);
@@ -801,6 +847,7 @@ function redrawRoute(){
     listEl.innerHTML = '<div style="color:var(--muted)">Sin puntos aún.</div>';
   }
   document.getElementById('totalDist').textContent = fmtDist(total);
+  saveState();
 }
 
 document.getElementById('btnUndo').onclick = () => {
@@ -818,6 +865,76 @@ document.getElementById('btnClear').onclick = () => {
   routeLine = null;
   redrawRoute();
 };
+
+// ---------- Exportación de la ruta ----------
+// CSV (mismo formato que el del área, para Excel) y GPX (estándar para
+// Google Earth, QGIS y otros GPS). Ambos se descargan con fecha y hora en
+// el nombre, sin backend de por medio.
+function downloadTextFile(text, filenamePrefix, ext){
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const ts = new Date();
+  const pad = (v) => String(v).padStart(2, '0');
+  const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filenamePrefix}_${stamp}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function exportRouteCSV(){
+  if (routePoints.length === 0){
+    statusEl.textContent = 'No hay puntos de ruta para exportar.';
+    statusEl.className = 'err';
+    return;
+  }
+  const rows = [['Punto', 'Latitud', 'Longitud', 'Huso', 'Hemisferio', 'Este_X', 'Norte_Y', 'Tramo_m', 'Acumulada_m']];
+  let acc = 0;
+  routePoints.forEach((p, i) => {
+    let seg = '';
+    if (i > 0){
+      const d = haversine(routePoints[i-1].lat, routePoints[i-1].lon, p.lat, p.lon);
+      acc += d;
+      seg = d.toFixed(1);
+    }
+    const u = toUTM(p.lat, p.lon);
+    rows.push(['P' + (i + 1), p.lat.toFixed(6), p.lon.toFixed(6), u.zone, u.hemi, u.easting.toFixed(2), u.northing.toFixed(2), seg, acc.toFixed(1)]);
+  });
+  rows.push([]);
+  rows.push(['Resumen']);
+  rows.push(['Puntos', routePoints.length]);
+  rows.push(['Distancia_total_m', acc.toFixed(1)]);
+  rows.push(['Distancia_total_km', (acc / 1000).toFixed(3)]);
+  // El BOM hace que Excel abra el CSV con los acentos correctos.
+  downloadTextFile('\ufeff' + rows.map(r => r.map(csvEscape).join(',')).join('\r\n'), 'ruta_gps', 'csv');
+  statusEl.textContent = `Ruta exportada: ${routePoints.length} puntos, ${fmtDist(acc)} (CSV).`;
+  statusEl.className = 'locked';
+}
+
+function exportRouteGPX(){
+  if (routePoints.length === 0){
+    statusEl.textContent = 'No hay puntos de ruta para exportar.';
+    statusEl.className = 'err';
+    return;
+  }
+  let gpx = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  gpx += '<gpx version="1.1" creator="Lector GPS / UTM" xmlns="http://www.topografix.com/GPX/1/1">\n';
+  gpx += '  <metadata><name>Ruta GPS</name></metadata>\n';
+  gpx += '  <trk><name>Ruta GPS</name><trkseg>\n';
+  routePoints.forEach(p => {
+    gpx += `    <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"></trkpt>\n`;
+  });
+  gpx += '  </trkseg></trk>\n</gpx>\n';
+  downloadTextFile(gpx, 'ruta_gps', 'gpx');
+  statusEl.textContent = `Ruta exportada: ${routePoints.length} puntos (GPX).`;
+  statusEl.className = 'locked';
+}
+
+document.getElementById('btnExportRouteCsv').onclick = exportRouteCSV;
+document.getElementById('btnExportRouteGpx').onclick = exportRouteGPX;
 
 // ---------- Cálculo de área de polígono ----------
 // Proyecta a UTM usando SIEMPRE el huso/hemisferio del primer vértice,
@@ -908,6 +1025,7 @@ function redrawArea(){
     statusEl.textContent = 'Polígono cerrado automáticamente. Sigue tocando para agregar más vértices.';
     statusEl.className = 'locked';
   }
+  saveState();
 }
 
 // Deshacer/borrar son comunes a "Digitalizar" y "Grabar puntos" (ambos
@@ -1194,6 +1312,49 @@ btnRecordFinish.onclick = () => {
   statusEl.textContent = `Grabación finalizada: ${areaPoints.length} vértices guardados en un archivo .csv. Área calculada.`;
   statusEl.className = 'locked';
 };
+
+// ---------- Restaurar trabajo guardado automáticamente ----------
+// Al abrir la app, la ruta y el polígono guardados vuelven tal cual quedaron:
+// se recrean sus marcadores y se recalculan distancia y área. Si no hay nada
+// guardado, no se muestra ningún aviso.
+(function restoreState(){
+  let restoredRoute = 0, restoredArea = 0;
+  const savedRoute = lsGet(LS_KEYS.route);
+  if (Array.isArray(savedRoute)){
+    savedRoute.forEach(p => {
+      if (p && isFinite(p.lat) && isFinite(p.lon)){
+        routePoints.push({ lat: p.lat, lon: p.lon });
+        routeMarkers.push(L.circleMarker([p.lat, p.lon], {
+          radius: 6, color: '#4caf7d', fillColor: '#4caf7d', fillOpacity: 0.9, weight: 2
+        }).addTo(map));
+        restoredRoute++;
+      }
+    });
+    if (restoredRoute) redrawRoute();
+  }
+  const savedMeta = lsGet(LS_KEYS.areaMeta);
+  if (savedMeta){
+    areaRefZone = savedMeta.refZone || null;
+    areaManualInfo = savedMeta.manualInfo || null;
+  }
+  const savedArea = lsGet(LS_KEYS.area);
+  if (Array.isArray(savedArea)){
+    savedArea.forEach(p => {
+      if (p && isFinite(p.lat) && isFinite(p.lon)){
+        areaPoints.push(p);
+        areaMarkers.push(L.circleMarker([p.lat, p.lon], {
+          radius: 6, color: '#4caf7d', fillColor: '#4caf7d', fillOpacity: 0.9, weight: 2
+        }).addTo(map));
+        restoredArea++;
+      }
+    });
+    if (restoredArea) redrawArea();
+  }
+  if (restoredRoute || restoredArea){
+    statusEl.textContent = `Trabajo guardado restaurado: ${restoredRoute} punto(s) de ruta y ${restoredArea} vértice(s).`;
+    statusEl.className = 'locked';
+  }
+})();
 </script>
 </body>
 </html>
